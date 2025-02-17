@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 
 
 const QuotationSchema = new mongoose.Schema({
-  quotationNumber: { type: String, unique: true },
+  
+  quotationNumber: { type: String, required: true, unique: true },
   companyName: { type: String, required: true },
   address: { type: String, required: true },
   contactNo: { type: String, required: true },

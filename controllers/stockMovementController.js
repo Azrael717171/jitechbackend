@@ -59,20 +59,21 @@ exports.addStockMovement = async (req, res) => {
   }
 };
 
-// ✅ Fetch Stock Movements with Pagination
+// ✅ Get paginated stock movements (NO FILTERING)
 exports.getStockMovements = async (req, res) => {
   try {
-    let { page = 1, limit = 5 } = req.query;
+    let { page = 1, limit = 10 } = req.query;
     page = parseInt(page);
     limit = parseInt(limit);
 
+    // ✅ Fetch stock movements (No filtering)
     const stockMovements = await StockMovement.find()
-      .sort({ timestamp: -1 }) // ✅ Sort newest first
-      .skip((page - 1) * limit) // ✅ Pagination offset
-      .limit(limit)
-      .populate("inventoryId", "productName");
+      .populate("inventoryId", "productName")
+      .sort({ timestamp: -1 }) // Latest movements first
+      .skip((page - 1) * limit)
+      .limit(limit);
 
-    const total = await StockMovement.countDocuments(); // ✅ Total count
+    const total = await StockMovement.countDocuments();
 
     res.json({
       data: stockMovements,

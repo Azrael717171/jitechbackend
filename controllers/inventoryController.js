@@ -1,7 +1,7 @@
 const Inventory = require("../models/Inventory");
 const Product = require("../models/Product");
 
-// Get paginated inventory list with sorting
+// Get paginated inventory list with sorting and filtering
 exports.getInventoryList = async (req, res) => {
   try {
     let {
@@ -9,13 +9,25 @@ exports.getInventoryList = async (req, res) => {
       limit = 10,
       sortBy = "createdAt",
       order = "desc",
+      search = "",
     } = req.query;
+
     page = parseInt(page);
     limit = parseInt(limit);
     const sortOrder = order === "desc" ? -1 : 1;
 
-    // ✅ Fetch inventory and include serial numbers
-    const inventory = await Inventory.find({ active: true })
+    // ✅ Build filter criteria for search
+    let filter = { active: true };
+
+    if (search) {
+      filter.$or = [
+        { productName: { $regex: search, $options: "i" } }, // Case-insensitive search
+        { sku: { $regex: search, $options: "i" } }, // Allow searching by SKU
+      ];
+    }
+
+    // ✅ Fetch inventory matching the filter
+    const inventory = await Inventory.find(filter)
       .populate(
         "productId",
         "productName sku category price active serialNumbers"
@@ -24,7 +36,7 @@ exports.getInventoryList = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit);
 
-    const total = await Inventory.countDocuments({ active: true });
+    const total = await Inventory.countDocuments(filter);
 
     res.json({
       data: inventory,

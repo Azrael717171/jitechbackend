@@ -43,10 +43,22 @@ exports.createProduct = async (req, res) => {
 
 exports.getAllProducts = async (req, res) => {
   try {
-    const products = await Product.find().lean(); // ✅ Use lean() for faster queries
+    let { page = 1, limit = 10 } = req.query;
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const skip = (page - 1) * limit;
 
-    // ✅ Fetch inventory details for each product
-    const inventoryData = await Inventory.find()
+    // ✅ Fetch paginated products
+    const products = await Product.find().skip(skip).limit(limit).lean(); // Use lean() for faster queries
+
+    // ✅ Get total number of products for pagination
+    const totalProducts = await Product.countDocuments();
+
+    // ✅ Fetch inventory details for paginated products only
+    const productIds = products.map((p) => p._id);
+    const inventoryData = await Inventory.find({
+      productId: { $in: productIds },
+    })
       .select("productId stockLevel serialNumbers")
       .lean();
 
@@ -62,8 +74,15 @@ exports.getAllProducts = async (req, res) => {
       };
     });
 
-    res.json({ data: mergedProducts });
+    // ✅ Return paginated response
+    res.json({
+      data: mergedProducts,
+      totalProducts,
+      totalPages: Math.ceil(totalProducts / limit),
+      currentPage: page,
+    });
   } catch (error) {
+    console.error("❌ Error fetching product list:", error);
     res.status(500).json({ error: "Server error" });
   }
 };

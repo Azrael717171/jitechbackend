@@ -3,13 +3,12 @@ const Product = require("../models/Product");
 const Inventory = require("../models/Inventory");
 const StockMovement = require("../models/StockMovement");
 
-// Create a new sale and update inventory & stock movements accordingly.
+// Create a new sale (with multiple sale items) and update inventory & stock movements accordingly.
 exports.createSale = async (req, res) => {
   try {
     const {
       clientName,
-      product: productId, // Expecting product ID selected from the frontend.
-      quantity,
+      saleItems, // Expecting an array of { product, quantity }
       dateOfPurchase,
       warranty,
       termPayable,
@@ -18,36 +17,88 @@ exports.createSale = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!clientName || !productId || !quantity || !dateOfPurchase || !warranty || !termPayable || !modeOfPayment || !status) {
+    if (
+      !clientName ||
+      !saleItems ||
+      !Array.isArray(saleItems) ||
+      saleItems.length === 0 ||
+      !dateOfPurchase ||
+      !warranty ||
+      !termPayable ||
+      !modeOfPayment ||
+      !status
+    ) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
-    // Fetch the product details.
-    const product = await Product.findById(productId);
-    if (!product) {
-      return res.status(404).json({ error: "Product not found" });
-    }
+    let computedOverallTotal = 0;
+    const processedSaleItems = [];
 
-    // Calculate total amount: product price * quantity
-    const totalAmount = product.price * quantity;
+    // Process each sale item
+    for (let item of saleItems) {
+      const { product: productId, quantity } = item;
+      if (!productId || !quantity) {
+        return res
+          .status(400)
+          .json({ error: "Each sale item must have a product and quantity" });
+      }
 
-    // Find the corresponding inventory record using productId.
-    const inventory = await Inventory.findOne({ productId: product._id });
-    if (!inventory) {
-      return res.status(404).json({ error: "Inventory record not found for the product" });
-    }
+      // Fetch the product details.
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res
+          .status(404)
+          .json({ error: `Product not found: ${productId}` });
+      }
 
-    // Check if there is enough stock.
-    if (inventory.stockLevel < quantity) {
-      return res.status(400).json({ error: "Insufficient stock for the sale" });
+      // Calculate total amount for this item.
+      const itemTotal = product.price * quantity;
+
+      // Find the corresponding inventory record using productId.
+      const inventory = await Inventory.findOne({ productId: product._id });
+      if (!inventory) {
+        return res
+          .status(404)
+          .json({ error: `Inventory record not found for product: ${product._id}` });
+      }
+
+      // Check if there is enough stock.
+      if (inventory.stockLevel < quantity) {
+        return res
+          .status(400)
+          .json({ error: `Insufficient stock for product: ${product.productName}` });
+      }
+
+      // Deduct the quantity from the inventory.
+      inventory.stockLevel -= quantity;
+      await inventory.save();
+
+      // Create a Stock Movement record for the decrease.
+      const stockMovement = new StockMovement({
+        inventoryId: inventory._id,
+        type: "DECREASE",
+        quantity,
+        serialNumbers: [], // Adjust if serial numbers are handled.
+        reason: "Sale deduction",
+        timestamp: new Date(),
+      });
+      await stockMovement.save();
+
+      computedOverallTotal += itemTotal;
+
+      // Prepare processed sale item entry.
+      processedSaleItems.push({
+        product: product._id,
+        quantity,
+        totalAmount: itemTotal,
+      });
     }
 
     // Create the Sale record.
     const newSale = new Sale({
       clientName,
-      product: product._id,
-      quantity,
-      totalAmount,
+      saleItems: processedSaleItems,
+      overallTotalAmount: computedOverallTotal,
       dateOfPurchase,
       warranty,
       termPayable,
@@ -55,28 +106,11 @@ exports.createSale = async (req, res) => {
       status,
     });
 
-    // Deduct the quantity from the inventory.
-    inventory.stockLevel -= quantity;
-    await inventory.save();
-
-    // Create a Stock Movement record for the decrease.
-    const stockMovement = new StockMovement({
-      inventoryId: inventory._id,
-      type: "DECREASE",
-      quantity,
-      serialNumbers: [], // For products that require serial numbers, you could pass an array here.
-      reason: "Sale deduction",
-      timestamp: new Date(),
-    });
-    await stockMovement.save();
-
-    // Save the sale record.
     await newSale.save();
 
     res.status(201).json({
       message: "Sale created successfully and inventory updated",
       sale: newSale,
-      newStockLevel: inventory.stockLevel,
     });
   } catch (error) {
     console.error("Error creating sale:", error);
@@ -87,8 +121,8 @@ exports.createSale = async (req, res) => {
 // Get all sales
 exports.getSales = async (req, res) => {
   try {
-    const sales = await Sale.find().populate("product", "productName sku category price");
-    // The returned documents will include the custom saleID field automatically.
+    // Populate saleItems.product to show product details
+    const sales = await Sale.find().populate("saleItems.product", "productName sku category price");
     res.json({ data: sales });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -98,7 +132,7 @@ exports.getSales = async (req, res) => {
 // Get a single sale by ID
 exports.getSaleById = async (req, res) => {
   try {
-    const sale = await Sale.findById(req.params.id).populate("product", "productName sku category price");
+    const sale = await Sale.findById(req.params.id).populate("saleItems.product", "productName sku category price");
     if (!sale) return res.status(404).json({ error: "Sale not found" });
     res.json(sale);
   } catch (error) {
@@ -112,8 +146,7 @@ exports.updateSale = async (req, res) => {
     const saleId = req.params.id;
     const {
       clientName,
-      product: newProductId,
-      quantity: newQuantity,
+      saleItems, // New sale items array
       dateOfPurchase,
       warranty,
       termPayable,
@@ -121,75 +154,96 @@ exports.updateSale = async (req, res) => {
       status,
     } = req.body;
 
-    // 1. Fetch the existing sale record
+    // 1. Fetch the existing sale record.
     const oldSale = await Sale.findById(saleId);
     if (!oldSale) return res.status(404).json({ error: "Sale not found" });
 
-    // 2. Reverse the effects of the old sale on inventory
-    // Fetch the old product's inventory record
-    const oldInventory = await Inventory.findOne({ productId: oldSale.product });
-    if (!oldInventory)
-      return res.status(404).json({ error: "Old product inventory not found" });
+    // 2. Reverse the effects of the old sale on inventory.
+    // For each old sale item, add back the quantity to its inventory.
+    for (let oldItem of oldSale.saleItems) {
+      const oldInventory = await Inventory.findOne({ productId: oldItem.product });
+      if (oldInventory) {
+        oldInventory.stockLevel += oldItem.quantity;
+        await oldInventory.save();
 
-    // Add back the old quantity to the old product's inventory
-    oldInventory.stockLevel += oldSale.quantity;
-    await oldInventory.save();
-
-    // Optionally, record a stock movement for reversal:
-    const reversalMovement = new StockMovement({
-      inventoryId: oldInventory._id,
-      type: "INCREASE",
-      quantity: oldSale.quantity,
-      serialNumbers: [], // Adjust if serials are handled
-      reason: "Sale update reversal",
-      timestamp: new Date(),
-    });
-    await reversalMovement.save();
-
-    // 3. Apply the new sale details
-
-    // If the product has changed, the new inventory must be used.
-    // Fetch the new product details
-    const newProduct = await Product.findById(newProductId);
-    if (!newProduct)
-      return res.status(404).json({ error: "New product not found" });
-
-    // Calculate the new total amount based on the new product price and quantity
-    const newTotalAmount = newProduct.price * newQuantity;
-
-    // Fetch the new product's inventory record
-    const newInventory = await Inventory.findOne({ productId: newProductId });
-    if (!newInventory)
-      return res.status(404).json({ error: "New product inventory not found" });
-
-    // Check if there is enough stock for the new sale quantity
-    if (newInventory.stockLevel < newQuantity) {
-      return res.status(400).json({ error: "Insufficient stock for new product" });
+        // Record reversal stock movement.
+        const reversalMovement = new StockMovement({
+          inventoryId: oldInventory._id,
+          type: "INCREASE",
+          quantity: oldItem.quantity,
+          serialNumbers: [], // Adjust if needed.
+          reason: "Sale update reversal",
+          timestamp: new Date(),
+        });
+        await reversalMovement.save();
+      }
     }
 
-    // Deduct the new quantity from the new product's inventory
-    newInventory.stockLevel -= newQuantity;
-    await newInventory.save();
+    // 3. Process new sale items.
+    let computedOverallTotal = 0;
+    const processedSaleItems = [];
 
-    // Optionally, record a stock movement for the new sale:
-    const saleMovement = new StockMovement({
-      inventoryId: newInventory._id,
-      type: "DECREASE",
-      quantity: newQuantity,
-      serialNumbers: [], // Adjust if serial numbers are needed
-      reason: "Sale update deduction",
-      timestamp: new Date(),
-    });
-    await saleMovement.save();
+    for (let item of saleItems) {
+      const { product: productId, quantity } = item;
+      if (!productId || !quantity) {
+        return res
+          .status(400)
+          .json({ error: "Each sale item must have a product and quantity" });
+      }
 
-    // 4. Update the sale document with new details
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res
+          .status(404)
+          .json({ error: `Product not found: ${productId}` });
+      }
+
+      const itemTotal = product.price * quantity;
+
+      const inventory = await Inventory.findOne({ productId: product._id });
+      if (!inventory) {
+        return res
+          .status(404)
+          .json({ error: `Inventory record not found for product: ${product._id}` });
+      }
+
+      if (inventory.stockLevel < quantity) {
+        return res
+          .status(400)
+          .json({ error: `Insufficient stock for product: ${product.productName}` });
+      }
+
+      // Deduct new quantity from inventory.
+      inventory.stockLevel -= quantity;
+      await inventory.save();
+
+      // Record stock movement for new sale.
+      const saleMovement = new StockMovement({
+        inventoryId: inventory._id,
+        type: "DECREASE",
+        quantity,
+        serialNumbers: [],
+        reason: "Sale update deduction",
+        timestamp: new Date(),
+      });
+      await saleMovement.save();
+
+      computedOverallTotal += itemTotal;
+
+      processedSaleItems.push({
+        product: product._id,
+        quantity,
+        totalAmount: itemTotal,
+      });
+    }
+
+    // 4. Update the sale document with new details.
     const updatedSale = await Sale.findByIdAndUpdate(
       saleId,
       {
         clientName,
-        product: newProductId,
-        quantity: newQuantity,
-        totalAmount: newTotalAmount,
+        saleItems: processedSaleItems,
+        overallTotalAmount: computedOverallTotal,
         dateOfPurchase,
         warranty,
         termPayable,
@@ -206,31 +260,30 @@ exports.updateSale = async (req, res) => {
   }
 };
 
-
-// Delete a sale (Optionally, you might consider reversing the stock deduction)
+// Delete a sale (Optionally, reverse the sale's effect on inventory)
 exports.deleteSale = async (req, res) => {
   try {
     const saleId = req.params.id;
     const sale = await Sale.findById(saleId);
     if (!sale) return res.status(404).json({ error: "Sale not found" });
 
-    // OPTIONAL: Reverse the sale's effect on inventory.
-    const product = await Product.findById(sale.product);
-    const inventory = await Inventory.findOne({ productId: product._id });
-    if (inventory) {
-      inventory.stockLevel += sale.quantity;
-      await inventory.save();
+    // Reverse the sale's effects: add back stock for each sale item.
+    for (let item of sale.saleItems) {
+      const inventory = await Inventory.findOne({ productId: item.product });
+      if (inventory) {
+        inventory.stockLevel += item.quantity;
+        await inventory.save();
 
-      // Record the reversal in stock movements.
-      const stockMovement = new StockMovement({
-        inventoryId: inventory._id,
-        type: "INCREASE",
-        quantity: sale.quantity,
-        serialNumbers: [], // Adjust if handling serial numbers.
-        reason: "Sale deletion - stock restored",
-        timestamp: new Date(),
-      });
-      await stockMovement.save();
+        const stockMovement = new StockMovement({
+          inventoryId: inventory._id,
+          type: "INCREASE",
+          quantity: item.quantity,
+          serialNumbers: [],
+          reason: "Sale deletion - stock restored",
+          timestamp: new Date(),
+        });
+        await stockMovement.save();
+      }
     }
 
     await Sale.findByIdAndDelete(saleId);

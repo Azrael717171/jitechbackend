@@ -1,24 +1,28 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const quotationRoutes = require('./routes/quotationRoutes');
+require("dotenv").config();
+const mongoose = require("mongoose");
+const app = require("./app");
 
-const app = express();
+const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(express.json());
-app.use(cors());
+// Debugging: Check if MONGO_URL is loaded
+console.log("🔍 MONGO_URL from .env:", process.env.MONGO_URL);
 
-// MongoDB Connection
-mongoose.connect('mongodb://localhost:27017/test', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-}).then(() => console.log("MongoDB Connected"))
-  .catch(err => console.error(err));
+// Ensure MONGO_URL is defined before connecting
+if (!process.env.MONGO_URL) {
+  console.error("❌ MONGO_URL is undefined! Check your .env file.");
+  process.exit(1); // Stop execution if missing
+}
 
-// API Routes
-app.use('/api/quotations', quotationRoutes);
+// Connect to MongoDB
+mongoose
+  .connect(process.env.MONGO_URL, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // Start Server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});

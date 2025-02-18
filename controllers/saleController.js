@@ -2,10 +2,16 @@ const Sale = require("../models/Sale");
 const Product = require("../models/Product");
 const Inventory = require("../models/Inventory");
 const StockMovement = require("../models/StockMovement");
+const mongoose = require("mongoose")
+
+// Add indexing to improve search performance
+Sale.collection.createIndex({ saleID: 1, clientName: 1 });
 
 // Create a new sale (with multiple sale items) and update inventory & stock movements accordingly.
 exports.createSale = async (req, res) => {
   try {
+    console.log("Incoming Sale Data:", req.body); // 🔍 Log request data
+
     const {
       clientName,
       saleItems, // Expecting an array of { product, quantity }
@@ -16,7 +22,6 @@ exports.createSale = async (req, res) => {
       status,
     } = req.body;
 
-    // Validate required fields
     if (
       !clientName ||
       !saleItems ||
@@ -28,27 +33,25 @@ exports.createSale = async (req, res) => {
       !modeOfPayment ||
       !status
     ) {
+      console.error("Missing required fields:", req.body);
       return res.status(400).json({ error: "All fields are required" });
     }
 
     let computedOverallTotal = 0;
     const processedSaleItems = [];
 
-    // Process each sale item
     for (let item of saleItems) {
       const { product: productId, quantity } = item;
       if (!productId || !quantity) {
-        return res
-          .status(400)
-          .json({ error: "Each sale item must have a product and quantity" });
+        console.error("Invalid sale item:", item);
+        return res.status(400).json({ error: "Each sale item must have a product and quantity" });
       }
 
       // Fetch the product details.
       const product = await Product.findById(productId);
       if (!product) {
-        return res
-          .status(404)
-          .json({ error: `Product not found: ${productId}` });
+        console.error("Product not found:", productId);
+        return res.status(404).json({ error: `Product not found: ${productId}` });
       }
 
       // Calculate total amount for this item.
@@ -57,16 +60,14 @@ exports.createSale = async (req, res) => {
       // Find the corresponding inventory record using productId.
       const inventory = await Inventory.findOne({ productId: product._id });
       if (!inventory) {
-        return res
-          .status(404)
-          .json({ error: `Inventory record not found for product: ${product._id}` });
+        console.error("Inventory record not found for product:", product._id);
+        return res.status(404).json({ error: `Inventory record not found for product: ${product._id}` });
       }
 
       // Check if there is enough stock.
       if (inventory.stockLevel < quantity) {
-        return res
-          .status(400)
-          .json({ error: `Insufficient stock for product: ${product.productName}` });
+        console.error("Insufficient stock for product:", product.productName);
+        return res.status(400).json({ error: `Insufficient stock for product: ${product.productName}` });
       }
 
       // Deduct the quantity from the inventory.
@@ -78,15 +79,13 @@ exports.createSale = async (req, res) => {
         inventoryId: inventory._id,
         type: "DECREASE",
         quantity,
-        serialNumbers: [], // Adjust if serial numbers are handled.
+        serialNumbers: [],
         reason: "Sale deduction",
         timestamp: new Date(),
       });
       await stockMovement.save();
 
       computedOverallTotal += itemTotal;
-
-      // Prepare processed sale item entry.
       processedSaleItems.push({
         product: product._id,
         quantity,
@@ -108,12 +107,11 @@ exports.createSale = async (req, res) => {
 
     await newSale.save();
 
-    res.status(201).json({
-      message: "Sale created successfully and inventory updated",
-      sale: newSale,
-    });
+    console.log("Sale created successfully:", newSale);
+    res.status(201).json({ message: "Sale created successfully", sale: newSale });
+
   } catch (error) {
-    console.error("Error creating sale:", error);
+    console.error("🔥 Error creating sale:", error); // 🔥 Log full error
     res.status(500).json({ error: error.message });
   }
 };

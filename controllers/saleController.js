@@ -121,13 +121,43 @@ exports.createSale = async (req, res) => {
 // Get all sales
 exports.getSales = async (req, res) => {
   try {
-    // Populate saleItems.product to show product details
-    const sales = await Sale.find().populate("saleItems.product", "productName sku category price");
-    res.json({ data: sales });
+    let { page = 1, limit = 10, search, sortBy = 'dateOfPurchase', order = 'desc' } = req.query;
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const query = {};
+
+    // If search query exists, filter by saleID or clientName
+    if (search) {
+      query.$or = [
+        { saleID: { $regex: search, $options: "i" } }, // Case-insensitive Sale ID
+        { clientName: { $regex: search, $options: "i" } } // Case-insensitive Client Name
+      ];
+    }
+
+    // Sorting logic
+    const sortOrder = order === 'asc' ? 1 : -1;
+    const sortQuery = { [sortBy]: sortOrder };
+
+    // Fetch sales with pagination and populate saleItems.product to show product details
+    const sales = await Sale.find(query)
+      .populate("saleItems.product", "productName sku category price")
+      .sort(sortQuery) // Apply sorting
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    // Count total sales matching the query (for pagination)
+    const total = await Sale.countDocuments(query);
+
+    res.json({
+      data: sales,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
+
 
 // Get a single sale by ID
 exports.getSaleById = async (req, res) => {

@@ -2,7 +2,6 @@ const Sale = require("../models/Sale");
 const Product = require("../models/Product");
 const Inventory = require("../models/Inventory");
 const StockMovement = require("../models/StockMovement");
-const mongoose = require("mongoose")
 
 // Add indexing to improve search performance
 Sale.collection.createIndex({ saleID: 1, clientName: 1 });
